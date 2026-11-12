@@ -12,6 +12,7 @@ import {
   experimental_useSidebarThreads,
   ThreadTitle,
   useSidebarThreadRowStatus,
+  useSdk,
 } from "@get-bb/plugin-sdk/app";
 import type {
   PluginSidebarThread,
@@ -63,13 +64,27 @@ function loadFilters(): Filters {
   return EMPTY;
 }
 
-function relativeTime(ms: number): string {
-  const min = Math.round((Date.now() - ms) / 60000);
-  if (min < 1) return "agora";
-  if (min < 60) return `${min} min`;
-  const h = Math.round(min / 60);
-  if (h < 24) return `${h} h`;
-  return `${Math.round(h / 24)} d`;
+/** Hora da última mensagem; passou de 24 h, mostra há quanto tempo. */
+function lastMessageLabel(ms: number): string {
+  const diff = Date.now() - ms;
+  if (diff < 24 * 3600_000)
+    return new Date(ms).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  const d = Math.floor(diff / (24 * 3600_000));
+  if (d < 30) return `há ${d} d`;
+  return `há ${Math.floor(d / 30)} m`;
+}
+
+function fullDate(ms: number): string {
+  return new Date(ms).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
+}
+
+/** Rerender a cada minuto para os horários não ficarem velhos. */
+function useMinuteTick() {
+  const [, set] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => set((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
 }
 
 function Select({
@@ -144,6 +159,7 @@ const Row = memo(function Row({
   onToggle: () => void;
   onNavigate: () => void;
 }) {
+  useMinuteTick();
   const rowStatus = useSidebarThreadRowStatus(thread.id);
   const target = {
     id: thread.id,
@@ -159,7 +175,8 @@ const Row = memo(function Row({
       : null,
   };
   const where = isCloud(thread) ? "Nuvem" : thread.host?.name;
-  const sub = [where, thread.environment?.branchName, relativeTime(thread.updatedAt)]
+  const lastAt = thread.latestAttentionAt || thread.updatedAt;
+  const sub = [where, thread.environment?.branchName, `última mensagem ${fullDate(lastAt)}`]
     .filter(Boolean)
     .join(" · ");
   return (
@@ -180,7 +197,7 @@ const Row = memo(function Row({
         />
         <ProviderIcon providerKind="agent" provider={providerLogo} className="size-4 shrink-0" aria-hidden />
         <span className={cn("min-w-0 truncate", thread.isUnread && "font-semibold")}>
-          <ThreadTitle threadId={thread.id} />
+          {thread.isArchived ? thread.displayTitle : <ThreadTitle threadId={thread.id} />}
         </span>
         {childCount > 0 ? (
           <button
@@ -198,6 +215,7 @@ const Row = memo(function Row({
           </button>
         ) : null}
         <span className="flex-1" />
+        <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{lastMessageLabel(lastAt)}</span>
         <span className="flex size-4 shrink-0 items-center justify-center">
           <StatusMark thread={thread} rowStatus={rowStatus != null} />
         </span>
@@ -206,6 +224,91 @@ const Row = memo(function Row({
   );
 });
 
+type ApiThread = Awaited<ReturnType<ReturnType<typeof useSdk>["threads"]["list"]>>[number];
+
+/**
+ * A lista viva da barra lateral não traz arquivadas (o pedido de "archived"
+ * volta vazio nesta versão). Busca pela API e adapta para o formato da linha.
+ */
+function useArchivedThreads(enabled: boolean, hostName: (id: string) => string | undefined) {
+  const sdk = useSdk();
+  const [rows, setRows] = useState<PluginSidebarThread[]>([]);
+  const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
+  useEffect(() => {
+    if (!enabled) return;
+    const ctrl = new AbortController();
+    setStatus("loading");
+    (async () => {
+      const all: ApiThread[] = [];
+      for (let offset = 0; offset < 20_000; offset += 1000) {
+        const page = await sdk.threads.list({ archived: true, limit: 1000, offset, signal: ctrl.signal });
+        all.push(...page);
+        if (page.length < 1000) break;
+      }
+      return all;
+    })()
+      .then((list) => {
+        setRows(list.map((t) => fromApi(t, hostName)));
+        setStatus("idle");
+      })
+      .catch(() => {
+        if (!ctrl.signal.aborted) setStatus("error");
+      });
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled, sdk]);
+  return { rows: enabled ? rows : [], status };
+}
+
+function fromApi(t: ApiThread, hostName: (id: string) => string | undefined): PluginSidebarThread {
+  const hostId = t.environmentHostId;
+  return {
+    id: t.id,
+    projectId: t.projectId,
+    title: t.title,
+    titleFallback: t.titleFallback,
+    displayTitle: t.title ?? t.titleFallback ?? t.id,
+    parentThreadId: t.parentThreadId,
+    lifecycleOwnerThreadId: null,
+    sourceThreadId: t.sourceThreadId,
+    sectionId: t.sectionId,
+    originKind: t.originKind,
+    originPluginId: t.originPluginId,
+    providerId: t.providerId,
+    status: t.status,
+    runtimeStatus: t.status,
+    queuedWork: "none",
+    hasPendingInteraction: false,
+    activity: { workflows: 0, backgroundAgents: 0, backgroundCommands: 0 },
+    indicator: "none",
+    indicatorLabel: null,
+    isUnread: false,
+    isPinned: false,
+    pinnedAt: null,
+    pinSortKey: null,
+    isArchived: true,
+    archivedAt: t.archivedAt,
+    href: `/projects/${t.projectId}/threads/${t.id}`,
+    isHidden: t.visibility === "hidden",
+    environment: t.environmentId
+      ? {
+          id: t.environmentId,
+          name: t.environmentName,
+          branchName: t.environmentBranchName,
+          path: t.environmentPath,
+          isWorktree: t.environmentIsWorktree,
+          providerId: t.environmentProviderId,
+          workspaceDisplayKind: null,
+        }
+      : null,
+    host: hostId ? { id: hostId, name: hostName(hostId) ?? hostId } : null,
+    createdAt: t.createdAt,
+    updatedAt: t.updatedAt,
+    lastReadAt: t.lastReadAt,
+    latestAttentionAt: t.latestAttentionAt,
+  } as unknown as PluginSidebarThread;
+}
+
 function ThreadSearchList(props: PluginThreadListProps) {
   const [f, setF] = useState<Filters>(loadFilters);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -213,9 +316,16 @@ function ThreadSearchList(props: PluginThreadListProps) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const state = experimental_useSidebarThreads({
-    experimental_lifecycles: f.archived ? ["active", "archived"] : ["active"],
+    experimental_lifecycles: ["active"],
   });
   const providers = experimental_useProviders();
+  const hostNames = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const h of state.experimental_hosts ?? []) m.set(h.id, h.name);
+    for (const t of state.threads) if (t.host) m.set(t.host.id, t.host.name);
+    return m;
+  }, [state.experimental_hosts, state.threads]);
+  const archived = useArchivedThreads(f.archived, (id) => hostNames.get(id));
 
   useEffect(() => {
     try {
@@ -241,8 +351,8 @@ function ThreadSearchList(props: PluginThreadListProps) {
   }, [providers.providers]);
 
   const visible = useMemo(
-    () => state.threads.filter((t) => !t.isHidden && (f.archived || !t.isArchived)),
-    [state.threads, f.archived],
+    () => [...state.threads, ...archived.rows].filter((t) => !t.isHidden && (f.archived || !t.isArchived)),
+    [state.threads, archived.rows, f.archived],
   );
 
   // Opções dos filtros saem só do que existe de fato.
@@ -461,15 +571,10 @@ function ThreadSearchList(props: PluginThreadListProps) {
             Mostrar mais ({tree.roots.length - limit})
           </button>
         ) : null}
-        {f.archived && state.experimental_archived?.hasNextPage ? (
-          <button
-            type="button"
-            disabled={state.experimental_archived.isFetchingNextPage}
-            onClick={() => void state.experimental_archived?.fetchNextPage()}
-            className="w-full py-2 text-xs text-muted-foreground hover:text-foreground"
-          >
-            {state.experimental_archived.isFetchingNextPage ? "Carregando…" : "Carregar mais arquivadas"}
-          </button>
+        {f.archived && archived.status !== "idle" ? (
+          <p className="px-2 py-2 text-xs text-muted-foreground">
+            {archived.status === "loading" ? "Carregando arquivadas…" : "Não deu para carregar as arquivadas."}
+          </p>
         ) : null}
       </div>
     </div>
