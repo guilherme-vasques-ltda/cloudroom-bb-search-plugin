@@ -128,7 +128,7 @@ type ProviderLogo = React.ComponentProps<typeof ProviderIcon>["provider"];
 /** Sinal à direita da linha, como o da lista nativa. */
 function StatusMark({ thread, rowStatus }: { thread: PluginSidebarThread; rowStatus: boolean }) {
   const label = thread.indicatorLabel ?? undefined;
-  if (thread.isArchived) return <Icon name="Archive" className="size-3.5 text-muted-foreground" />;
+  if (thread.isArchived) return <Icon name="Archive" className="size-3.5 text-amber-400" />;
   if (thread.hasPendingInteraction || thread.indicator === "waiting-for-input")
     return <span title={label} className="size-2 animate-pulse rounded-full bg-amber-400" />;
   if (thread.status === "error" || thread.queuedWork === "failed" || thread.indicator === "unread-error")
@@ -191,6 +191,24 @@ const Row = memo(function Row({
           active ? "bg-accent text-foreground" : "text-foreground/90 hover:bg-accent/60",
         )}
       >
+        {childCount > 0 ? (
+          <button
+            type="button"
+            aria-label={open ? "Recolher filhas" : `Mostrar ${childCount} filhas`}
+            aria-expanded={open}
+            title={open ? "Recolher" : `Expandir (${childCount})`}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onToggle();
+            }}
+            className="-ml-1 flex size-4 shrink-0 items-center justify-center rounded border border-foreground/30 text-[11px] font-semibold leading-none text-muted-foreground hover:border-foreground/60 hover:text-foreground"
+          >
+            {open ? "−" : "+"}
+          </button>
+        ) : (
+          <span className="-ml-1 size-4 shrink-0" aria-hidden />
+        )}
         <Icon
           name={isCloud(thread) ? "Cloud" : "Laptop"}
           className={cn("size-4 shrink-0", isCloud(thread) ? "text-lime-400" : "text-muted-foreground")}
@@ -199,21 +217,6 @@ const Row = memo(function Row({
         <span className={cn("min-w-0 truncate", thread.isUnread && "font-semibold")}>
           {thread.isArchived ? thread.displayTitle : <ThreadTitle threadId={thread.id} />}
         </span>
-        {childCount > 0 ? (
-          <button
-            type="button"
-            aria-label={open ? "Recolher filhas" : `Mostrar ${childCount} filhas`}
-            aria-expanded={open}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onToggle();
-            }}
-            className="shrink-0 text-muted-foreground hover:text-foreground"
-          >
-            <Icon name={open ? "ChevronDown" : "ChevronRight"} className="size-3.5" />
-          </button>
-        ) : null}
         <span className="flex-1" />
         <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{lastMessageLabel(lastAt)}</span>
         <span className="flex size-4 shrink-0 items-center justify-center">
