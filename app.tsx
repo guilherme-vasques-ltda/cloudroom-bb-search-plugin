@@ -727,12 +727,14 @@ function ThreadSearchList(props: PluginThreadListProps) {
           </button>
         </div>
         {f.showFilters ? (<>
-        <div className="grid grid-cols-2 gap-1">
+        <div className="flex gap-1">
           <Select label="Projeto" value={f.projectId} onChange={(v) => set("projectId", v)} options={options.projects} />
+          <Select label="Pasta" value={f.section} onChange={(v) => set("section", v)} options={options.sections} />
           <Select label="Agente" value={f.providerId} onChange={(v) => set("providerId", v)} options={options.providers} />
+        </div>
+        <div className="flex gap-1">
           <Select label="Máquina" value={f.host} onChange={(v) => set("host", v)} options={options.hosts} />
           <Select label="Tag" value={f.tag} onChange={(v) => set("tag", v)} options={options.tags} />
-          <Select label="Pasta" value={f.section} onChange={(v) => set("section", v)} options={options.sections} />
         </div>
         <div className="flex items-center justify-between text-[11px] text-muted-foreground">
           <label className="flex cursor-pointer items-center gap-1">
