@@ -1,0 +1,7 @@
+{
+  "version": 3,
+  "sources": ["../../server.ts"],
+  "sourcesContent": ["// Sem backend: o plugin s\u00F3 l\u00EA o estado da barra lateral no frontend.\nimport type { BbPluginApi } from \"@get-bb/plugin-sdk\";\n\nexport default function plugin(_bb: BbPluginApi) {}\n"],
+  "mappings": ";;;;;;;;AAGe,SAAR,OAAwB,KAAkB;AAAC;",
+  "names": []
+}

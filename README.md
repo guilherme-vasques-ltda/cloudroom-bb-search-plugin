@@ -1,0 +1,22 @@
+# cloudroom-bb-search-plugin
+
+Plugin do Cloudroom que troca a lista de threads da barra lateral por uma lista com **busca e filtros**.
+
+- Busca por título, projeto, agente, máquina, branch ou id (sem diferenciar acento/maiúscula; várias palavras = todas precisam bater).
+- Filtros: Projeto, Agente, Máquina, incluir arquivadas.
+- Agrupado por projeto; threads rodando primeiro, depois fixadas, depois recentes.
+- Clique direito abre o menu normal da thread. Filtros ficam salvos.
+
+## Instalar
+
+```sh
+room-cli plugin install https://github.com/guilherme-vasques-ltda/cloudroom-bb-search-plugin
+```
+
+Ou de uma cópia local: `npm install && room-cli plugin build . && room-cli plugin install .`
+
+Para voltar à lista padrão: Settings → Appearance → Sidebar.
+
+## Desenvolver
+
+`room-cli plugin dev .` recompila e recarrega a cada mudança.
