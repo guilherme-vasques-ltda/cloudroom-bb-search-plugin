@@ -978,6 +978,20 @@ function ThreadSearchList(props: PluginThreadListProps) {
             {!f.showFilters && [f.projectId, f.providerId, f.host, f.tag, f.section].filter(Boolean).length + (f.archived ? 1 : 0) > 0 ? <span className="text-[10px]">{[f.projectId, f.providerId, f.host, f.tag, f.section].filter(Boolean).length + (f.archived ? 1 : 0)}</span> : null}
           </button>
         </div>
+        {!f.showFilters && filtersOn ? (
+          <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+            <span>
+              Filtros ativos · {filtered.length} de {visible.length}
+            </span>
+            <button
+              type="button"
+              className="flex items-center gap-1 underline hover:text-foreground"
+              onClick={() => setF((p) => ({ ...EMPTY, showFilters: p.showFilters }))}
+            >
+              <Icon name="X" className="size-3" /> Limpar filtros
+            </button>
+          </div>
+        ) : null}
         {f.showFilters ? (<>
         <div className="flex gap-1">
           <Select label="Projeto" value={f.projectId} onChange={(v) => set("projectId", v)} options={options.projects} />
@@ -997,7 +1011,7 @@ function ThreadSearchList(props: PluginThreadListProps) {
             {filtered.length} de {visible.length}
             {filtersOn ? (
               <button type="button" className="ml-2 underline hover:text-foreground" onClick={() => setF((p) => ({ ...EMPTY, showFilters: p.showFilters }))}>
-                limpar
+                limpar filtros
               </button>
             ) : null}
           </span>
