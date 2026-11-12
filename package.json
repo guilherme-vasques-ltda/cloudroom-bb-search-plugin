@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-buscar-threads",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "engines": {
     "bb": ">=151.0",
@@ -8,7 +8,7 @@
   },
   "bb": {
     "name": "Buscar Threads",
-    "description": "Busca e filtros (projeto, agente, máquina) na lista de threads da barra lateral.",
+    "description": "Lista de threads com busca, filtros, pastas, tags e fixadas, mantendo a árvore de agentes.",
     "branding": {
       "icon": "Search"
     },

@@ -1,1 +1,1 @@
-Lista de threads com busca por texto e filtros de projeto, agente e máquina. Substitui a lista padrão da barra lateral; dá para voltar em Settings → Appearance → Sidebar.
+Lista de threads com busca, filtros (projeto, pasta, agente, máquina, tag), pastas com arrastar e clique direito, fixadas no topo da pasta, tags ligadas a Tasks e arquivadas. Mantém a árvore mãe → filhas. Agentes organizam pastas e tags pelo `room-cli`. Para voltar à lista padrão: Settings → Appearance → Sidebar.
