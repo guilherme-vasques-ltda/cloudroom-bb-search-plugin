@@ -296,6 +296,7 @@ const Row = memo(function Row({
           {thread.isArchived ? thread.displayTitle : <ThreadTitle threadId={thread.id} />}
         </span>
         <span className="flex-1" />
+        {thread.isPinned ? <Icon name="Pin" className="size-3 shrink-0 text-muted-foreground" /> : null}
         <Tags tags={tags} />
         <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{lastMessageLabel(lastAt)}</span>
         <span className="flex size-4 shrink-0 items-center justify-center">
@@ -629,10 +630,8 @@ function ThreadSearchList(props: PluginThreadListProps) {
   const renderFolders = (projectId: string, threads: PluginSidebarThread[]): ReactNode => {
     const bySection = new Map<string, PluginSidebarThread[]>();
     const loose: PluginSidebarThread[] = [];
-    const pinned: PluginSidebarThread[] = [];
     for (const t of threads) {
-      if (t.isPinned) pinned.push(t);
-      else if (t.sectionId && sectionName.has(t.sectionId)) {
+      if (t.sectionId && sectionName.has(t.sectionId)) {
         const g = bySection.get(t.sectionId);
         if (g) g.push(t);
         else bySection.set(t.sectionId, [t]);
@@ -641,17 +640,14 @@ function ThreadSearchList(props: PluginThreadListProps) {
     const folders = [...bySection.entries()].sort((a, b) =>
       (sectionName.get(a[0]) ?? "").localeCompare(sectionName.get(b[0]) ?? ""),
     );
-    pinned.sort((a, b) => (a.pinSortKey ?? "~").localeCompare(b.pinSortKey ?? "~") || (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0));
+    // Fixadas sempre em primeiro dentro do lugar delas (pasta ou projeto).
+    const pinFirst = (list: PluginSidebarThread[]) =>
+      [...list.filter((t) => t.isPinned).sort(
+        (a, b) => (a.pinSortKey ?? "~").localeCompare(b.pinSortKey ?? "~") || (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0),
+      ), ...list.filter((t) => !t.isPinned)];
     return (
       <>
-        {pinned.length > 0 ? (
-          <div className="mb-1 rounded-md bg-accent/30 pb-0.5">
-            <div className="flex items-center gap-1.5 px-2 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-              <Icon name="Pin" className="size-3" /> Fixadas
-            </div>
-            {pinned.map((t) => renderTree(t, 0))}
-          </div>
-        ) : null}
+        {pinFirst(loose).filter((t) => t.isPinned).map((t) => renderTree(t, 0))}
         {folders.map(([sectionId, items]) => {
           const key = `${projectId}:${sectionId}`;
           const closed = collapsed[key] && !f.query;
@@ -671,12 +667,12 @@ function ThreadSearchList(props: PluginThreadListProps) {
                 <span className="shrink-0 text-[11px] text-muted-foreground">{items.length}</span>
               </button>
               {closed ? null : (
-                <div className="ml-[15px] border-l border-sky-400/40 pl-1.5">{items.map((t) => renderTree(t, 0))}</div>
+                <div className="ml-[15px] border-l border-sky-400/40 pl-1.5">{pinFirst(items).map((t) => renderTree(t, 0))}</div>
               )}
             </div>
           );
         })}
-        {loose.map((t) => renderTree(t, 0))}
+        {loose.filter((t) => !t.isPinned).map((t) => renderTree(t, 0))}
       </>
     );
   };
