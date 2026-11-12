@@ -312,6 +312,37 @@ function fromApi(t: ApiThread, hostName: (id: string) => string | undefined): Pl
   } as unknown as PluginSidebarThread;
 }
 
+/**
+ * Nomes das pastas (seções). A lista viva chega vazia nesta versão do
+ * Cloudroom, então busca pela API: ao abrir, quando aparece uma pasta
+ * desconhecida (um agente criou) e a cada minuto (renomeações).
+ */
+function useSectionNames(
+  live: readonly { id: string; name: string }[],
+  threads: readonly PluginSidebarThread[],
+): Map<string, string> {
+  const sdk = useSdk();
+  const [fetched, setFetched] = useState<{ id: string; name: string }[]>([]);
+  const [tick, setTick] = useState(0);
+  const known = new Set([...live, ...fetched].map((x) => x.id));
+  const unknownKey = [...new Set(threads.map((t) => t.sectionId).filter((id): id is string => !!id && !known.has(id)))]
+    .sort()
+    .join(",");
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    sdk.threadSections
+      .list({ signal: ctrl.signal })
+      .then((list) => setFetched(list.map((x) => ({ id: x.id, name: x.name }))))
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, [sdk, unknownKey, tick]);
+  return useMemo(() => new Map([...fetched, ...live].map((x) => [x.id, x.name])), [fetched, live]);
+}
+
 function ThreadSearchList(props: PluginThreadListProps) {
   const [f, setF] = useState<Filters>(loadFilters);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -346,6 +377,8 @@ function ThreadSearchList(props: PluginThreadListProps) {
     for (const p of state.projects) m.set(p.id, p.isPersonal ? "Pessoal" : p.name);
     return m;
   }, [state.projects]);
+
+  const sectionName = useSectionNames(state.sections, state.threads);
 
   const providerById = useMemo(() => {
     const m = new Map<string, (typeof providers.providers)[number]>();
@@ -396,6 +429,7 @@ function ThreadSearchList(props: PluginThreadListProps) {
           t.host?.name,
           t.environment?.branchName,
           t.environment?.name,
+          t.sectionId ? sectionName.get(t.sectionId) : null,
         ]
           .filter(Boolean)
           .join(" "),
@@ -410,7 +444,7 @@ function ThreadSearchList(props: PluginThreadListProps) {
         b.updatedAt - a.updatedAt,
     );
     return out;
-  }, [visible, f, projectName, providerById]);
+  }, [visible, f, projectName, providerById, sectionName]);
 
   // Árvore pai → filhas, como a lista nativa. Com filtro, os pais de quem
   // bateu entram junto para não perder o contexto.
@@ -484,6 +518,52 @@ function ThreadSearchList(props: PluginThreadListProps) {
     );
   };
 
+  // Pastas = seções do Cloudroom. Cada mãe vai para a pasta dela; as filhas
+  // acompanham a mãe. Pastas por nome, threads soltas no fim.
+  const renderFolders = (projectId: string, threads: PluginSidebarThread[]): ReactNode => {
+    const bySection = new Map<string, PluginSidebarThread[]>();
+    const loose: PluginSidebarThread[] = [];
+    for (const t of threads) {
+      if (t.sectionId && sectionName.has(t.sectionId)) {
+        const g = bySection.get(t.sectionId);
+        if (g) g.push(t);
+        else bySection.set(t.sectionId, [t]);
+      } else loose.push(t);
+    }
+    const folders = [...bySection.entries()].sort((a, b) =>
+      (sectionName.get(a[0]) ?? "").localeCompare(sectionName.get(b[0]) ?? ""),
+    );
+    return (
+      <>
+        {folders.map(([sectionId, items]) => {
+          const key = `${projectId}:${sectionId}`;
+          const closed = collapsed[key] && !f.query;
+          return (
+            <div key={key}>
+              <button
+                type="button"
+                onClick={() => setCollapsed((c) => ({ ...c, [key]: !c[key] }))}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-foreground/90 hover:bg-accent/60"
+              >
+                <span className="-ml-1 flex size-4 shrink-0 items-center justify-center rounded border border-foreground/30 text-[11px] font-semibold leading-none text-muted-foreground">
+                  {closed ? "+" : "−"}
+                </span>
+                <Icon name={closed ? "Folder" : "FolderOpen"} className="size-4 shrink-0 text-sky-400" />
+                <span className="min-w-0 truncate font-medium">{sectionName.get(sectionId)}</span>
+                <span className="flex-1" />
+                <span className="shrink-0 text-[11px] text-muted-foreground">{items.length}</span>
+              </button>
+              {closed ? null : (
+                <div className="ml-[15px] border-l border-sky-400/40 pl-1.5">{items.map((t) => renderTree(t, 0))}</div>
+              )}
+            </div>
+          );
+        })}
+        {loose.map((t) => renderTree(t, 0))}
+      </>
+    );
+  };
+
   const filtersOn =
     f.query !== "" || f.projectId !== "" || f.providerId !== "" || f.host !== "" || f.archived;
 
@@ -502,7 +582,7 @@ function ThreadSearchList(props: PluginThreadListProps) {
                 inputRef.current?.blur();
               }
             }}
-            placeholder="Buscar título, projeto, branch, id…"
+            placeholder="Buscar título, pasta, projeto, branch, id…"
             aria-label="Buscar threads"
             autoComplete="off"
             spellCheck={false}
@@ -560,7 +640,7 @@ function ThreadSearchList(props: PluginThreadListProps) {
                   <Icon name={isCollapsed ? "ChevronRight" : "ChevronDown"} className="size-3" />
                   <span className="truncate">{projectName.get(projectId) ?? projectId}</span>
                 </button>
-                {isCollapsed ? null : threads.map((t) => renderTree(t, 0))}
+                {isCollapsed ? null : renderFolders(projectId, threads)}
               </section>
             );
           })

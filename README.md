@@ -7,6 +7,7 @@ Plugin do Cloudroom que troca a lista de threads da barra lateral por uma lista 
 <sub>Imagem com dados de exemplo.</sub>
 
 - Busca por título, projeto, agente, máquina, branch ou id (sem diferenciar acento/maiúscula; várias palavras = todas precisam bater).
+- Pastas: as seções do Cloudroom aparecem como pastas dentro de cada projeto. A skill `organizar-pastas` ensina os agentes a criar pastas e mover threads.
 - Filtros: Projeto, Agente, Máquina, incluir arquivadas (busca todas as arquivadas pela API).
 - Agrupado por projeto, com a mesma árvore da lista nativa: ícone de máquina (local/nuvem), threads filhas recuadas sob a mãe e setinha para abrir/fechar. Ao filtrar, a mãe de quem bateu aparece junto.
 - Hora da última mensagem em cada linha (há N d se passou de 24 h).
