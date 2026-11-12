@@ -1,85 +1,89 @@
 # cloudroom-bb-search-plugin
 
-Plugin do Cloudroom que troca a lista de threads da barra lateral por uma lista com **busca, filtros, pastas e tags**, mantendo a árvore de agentes (mãe → filhas).
+A Cloudroom plugin that replaces the sidebar thread list with one that has **search, filters, folders and tags**, while keeping the agent tree (parent → children).
 
-<img src="docs/screenshot.png" alt="Barra lateral com busca, filtros e árvore de threads" width="458">
+<img src="docs/screenshot.png" alt="Sidebar with search, filters and the thread tree" width="458">
 
-<sub>Imagem com dados de exemplo.</sub>
+<sub>Screenshot with sample data. The UI is in Portuguese (pt-BR).</sub>
 
-## O que tem
+## Features
 
-### Busca e filtros
-- Busca por título, tag, pasta, projeto, agente, máquina, branch ou id. Não diferencia acento nem maiúscula; com várias palavras, todas precisam aparecer. `Esc` limpa.
-- Filtros: **Projeto · Pasta · Agente** na primeira linha, **Máquina · Tag** na segunda, e "Incluir arquivadas".
-- Projeto e Pasta se filtram entre si: escolhido um projeto, o filtro de Pasta só mostra as pastas dele, e vice-versa.
-- Filtros **retráteis**: o ícone dentro da busca esconde e mostra a barra e indica quantos filtros estão ativos.
-- **Limpar filtros** fica sempre à mão, com os filtros abertos ou recolhidos.
-- Os filtros ficam salvos entre aberturas.
+### Search and filters
+- Search by title, tag, folder, project, agent, machine, branch or id. Accent- and case-insensitive; with several words, all must match. `Esc` clears.
+- Filters: **Project · Folder · Agent** on the first row, **Machine · Tag** on the second, plus "Include archived".
+- Project and Folder narrow each other: pick a project and the Folder filter only lists its folders, and vice versa.
+- **Collapsible** filters: the icon inside the search box hides/shows them and shows how many are active.
+- **Clear filters** is always reachable, whether the filters are open or collapsed.
+- Filters are remembered across sessions.
 
-### Árvore e lista
-- Agrupada por projeto, com a mesma árvore da lista nativa: threads filhas recuadas sob a mãe, com linha guia.
-- **+ / −** no começo da linha abre e fecha as filhas; **⌄ / ⌃** na busca expandem ou retraem tudo.
-- Ícone de onde a thread roda (notebook = local, nuvem = cloud) e ícone colorido do agente.
-- Hora da última mensagem; passou de 24 h, mostra há quanto tempo ("há 3 d").
-- Sinais de status: girando (rodando), amarelo pulsando (precisa de você), vermelho (erro), azul (mensagem na fila), cinza (não lida), caixa amarela (arquivada).
-- Ao filtrar, a mãe de uma thread encontrada aparece junto, para não perder o contexto.
+### Tree and list
+- Grouped by project, with the same tree as the built-in list: child threads indented under their parent, with a guide line.
+- **+ / −** at the start of a row opens/closes its children; **⌄ / ⌃** in the search box expand or collapse everything.
+- Where the thread runs (laptop = local, cloud = cloud) and the agent's colored icon.
+- Time of the last message; after 24 h, how long ago ("há 3 d").
+- Status marks: spinner (running), pulsing amber (needs you), red (error), blue (queued message), gray (unread), amber box (archived).
+- When filtering, the parent of a matching thread is shown too, so you keep the context.
 
-### Pastas
-- As seções do Cloudroom aparecem como **pastas dentro de cada projeto**.
-- **Clique direito** no nome do projeto ou numa pasta: criar, renomear e apagar pastas. Apagar pede confirmação; as threads ficam soltas.
-- **Arraste** uma thread para uma pasta para mover; solte no nome do projeto para tirá-la da pasta.
+### Folders
+- Cloudroom thread sections show up as **folders inside each project**.
+- **Right-click** a project name or a folder to create, rename or delete folders. Deleting asks for confirmation; its threads become loose.
+- **Drag** a thread onto a folder to move it; drop it on the project name to take it out of its folder.
 
-### Fixadas
-- Uma thread fixada fica sempre em primeiro **dentro do lugar dela** (topo da pasta, ou topo do projeto se estiver solta), com a árvore inteira.
+### Pinned
+- A pinned thread is always first **inside its own place** (top of its folder, or top of the project if it is loose), with its whole tree.
 
 ### Tags
-- Etiquetas pequenas antes da hora, até 2 por linha e "+N" para o resto.
-- Uma tag com chave de Task (ex.: `MX-213`) fica destacada em amarelo: é assim que a thread se liga à Task.
-- Para editar à mão: clique direito → **Tags…**, tags separadas por vírgula.
+- Small tag chips before the time, up to 2 per row plus "+N".
+- A tag shaped like a Task key (e.g. `MX-213`) is highlighted in amber: that is how a thread is linked to a Task.
+- Edit by hand: right-click → **Tags…**, comma-separated.
 
-### Clique direito numa thread
-Fixar/desafixar · Mover para pasta › · Nova pasta com esta thread · Tirar da pasta · Tags… · Renomear… · Copiar id · Arquivar/desarquivar.
+### Right-click on a thread
+Pin/unpin · Move to folder › · New folder with this thread · Remove from folder · Tags… · Rename… · Copy id · Archive/unarchive.
 
-### Arquivadas
-- "Incluir arquivadas" busca todas as threads arquivadas, e elas entram na árvore, na busca e nos filtros.
+### Archived
+- "Include archived" loads every archived thread into the tree, search and filters.
 
-## Para agentes
+## For agents
 
-O plugin traz duas skills, que o Cloudroom entrega aos agentes, e um comando:
+The plugin ships two skills, which Cloudroom gives to agents, and a CLI command:
 
-- **`organizar-pastas`**: organizar threads em pastas com `room-cli thread section ...` e `room-cli thread update <id> --section <sec_id>`.
-- **`tags-de-threads`**: marcar threads com tags, incluindo a chave da Task em que o agente está trabalhando.
+- **`organizar-pastas`**: organize threads into folders with `room-cli thread section ...` and `room-cli thread update <id> --section <sec_id>`.
+- **`tags-de-threads`**: tag threads, including the key of the Task the agent is working on.
 
 ```sh
-room-cli tags list [--thread <id>]          # sem --thread: a thread atual
-room-cli tags add MX-213 revisão
-room-cli tags remove revisão
-room-cli tags set MX-213 urgente            # troca todas
+room-cli tags list [--thread <id>]          # without --thread: the current thread
+room-cli tags add MX-213 review
+room-cli tags remove review
+room-cli tags set MX-213 urgent             # replace all tags
 room-cli tags clear
-room-cli tags all --json                    # tags em uso + contagem
-room-cli tags find MX-213 --json            # threads com a tag
-room-cli tags rename revisao revisão        # em todas as threads
+room-cli tags all --json                    # tags in use + counts
+room-cli tags find MX-213 --json            # threads with a tag
+room-cli tags rename reveiw review          # across all threads
 ```
 
-## Instalar
+## Install
 
 ```sh
 room-cli plugin install https://github.com/guilherme-vasques-ltda/cloudroom-bb-search-plugin --yes
 ```
 
-Ou de uma cópia local: `npm install && room-cli plugin build . && room-cli plugin install . --yes`
+Or from a local copy: `npm install && room-cli plugin build . && room-cli plugin install . --yes`
 
-Para voltar à lista padrão: Settings → Appearance → Sidebar.
+To go back to the built-in list: Settings → Appearance → Sidebar.
 
-## Limites conhecidos
+## Known limits
 
-O plugin usa partes experimentais do SDK do Cloudroom. Nesta versão (v151):
+The plugin uses experimental parts of the Cloudroom SDK. In this version (v151):
 
-- O hook de threads devolve vazias as arquivadas e as seções. O plugin busca as duas pela API.
-- O símbolo de status e o menu de contexto do próprio Cloudroom não funcionam dentro do plugin. Por isso o plugin desenha os seus.
-- O plugin não sabe com certeza se uma thread roda local ou na nuvem: mostra "nuvem" quando a thread não tem máquina.
-- O novo nome de uma pasta renomeada pode levar até 1 minuto para aparecer.
+- The threads hook returns archived threads and sections empty. The plugin loads both from the API instead.
+- Cloudroom's own status glyph and context menu don't work inside the plugin, so it draws its own.
+- The plugin can't tell for sure whether a thread runs locally or in the cloud: it shows "cloud" when the thread has no machine.
+- A renamed folder can take up to a minute to show its new name.
 
-## Desenvolver
+## Development
 
-`room-cli plugin dev .` recompila e recarrega a cada mudança. Não mude o `name` do `package.json`: ele define o id do plugin, e mudar quebra o CSS.
+`room-cli plugin dev .` rebuilds and reloads on every change. Don't change `name` in `package.json`: it sets the plugin id, and changing it breaks the scoped CSS.
+
+## License
+
+MIT

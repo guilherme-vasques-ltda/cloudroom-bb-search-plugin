@@ -8,7 +8,7 @@
   },
   "bb": {
     "name": "Buscar Threads",
-    "description": "Lista de threads com busca, filtros, pastas, tags e fixadas, mantendo a árvore de agentes.",
+    "description": "Thread list with search, filters, folders, tags and pinned threads, keeping the agent tree.",
     "branding": {
       "icon": "Search"
     },
