@@ -2,13 +2,13 @@
 // lista com busca e filtros (projeto, agente, máquina, arquivadas).
 // Só frontend: lê o estado vivo da barra lateral pelo SDK, sem servidor.
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import type * as React from "react";
 import type { ReactNode } from "react";
 import {
   definePluginApp,
   experimental_ProviderIcon as ProviderIcon,
   experimental_ThreadActionsContextMenu as ThreadActionsContextMenu,
-  experimental_ThreadStatusGlyph as ThreadStatusGlyph,
-  experimental_useProviders,
+    experimental_useProviders,
   experimental_useSidebarThreads,
   ThreadTitle,
   useSidebarThreadRowStatus,
@@ -108,7 +108,24 @@ function isCloud(t: PluginSidebarThread): boolean {
   return t.host == null;
 }
 
-type ProviderLogo = { id: string; logoUrl?: string | null; icon?: { glyph: string } | null };
+type ProviderLogo = React.ComponentProps<typeof ProviderIcon>["provider"];
+
+/** Sinal à direita da linha, como o da lista nativa. */
+function StatusMark({ thread, rowStatus }: { thread: PluginSidebarThread; rowStatus: boolean }) {
+  const label = thread.indicatorLabel ?? undefined;
+  if (thread.isArchived) return <Icon name="Archive" className="size-3.5 text-muted-foreground" />;
+  if (thread.hasPendingInteraction || thread.indicator === "waiting-for-input")
+    return <span title={label} className="size-2 animate-pulse rounded-full bg-amber-400" />;
+  if (thread.status === "error" || thread.queuedWork === "failed" || thread.indicator === "unread-error")
+    return <span title={label ?? "Erro"} className="size-2 rounded-full bg-red-500" />;
+  if (isRunning(thread) || thread.indicator === "runtime")
+    return <Icon name="Spinner" className="size-3.5 animate-spin text-muted-foreground [animation-duration:2.5s]" />;
+  if (thread.queuedWork === "waiting")
+    return <span title={label} className="size-1.5 rounded-full bg-sky-400" />;
+  if (thread.isUnread || thread.indicator === "unread-success" || rowStatus)
+    return <span title={label} className="size-1.5 rounded-full bg-muted-foreground" />;
+  return null;
+}
 
 const Row = memo(function Row({
   thread,
@@ -181,8 +198,8 @@ const Row = memo(function Row({
           </button>
         ) : null}
         <span className="flex-1" />
-        <span className="flex size-4 shrink-0 items-center justify-center" aria-label={thread.indicatorLabel ?? undefined}>
-          <ThreadStatusGlyph indicator={thread.indicator} archived={thread.isArchived} rowStatus={rowStatus} size="compact" />
+        <span className="flex size-4 shrink-0 items-center justify-center">
+          <StatusMark thread={thread} rowStatus={rowStatus != null} />
         </span>
       </a>
     </ThreadActionsContextMenu>
@@ -339,14 +356,14 @@ function ThreadSearchList(props: PluginThreadListProps) {
         <Row
           thread={t}
           active={t.id === props.activeThreadId}
-          providerLogo={p ? { id: p.id, logoUrl: p.logoUrl, icon: p.icon ?? null } : { id: t.providerId }}
+          providerLogo={p ?? { id: t.providerId }}
           childCount={kids.length}
           open={open}
           onToggle={() => setOpenState((s) => ({ ...s, [t.id]: !open }))}
           onNavigate={props.onNavigate}
         />
         {open && kids.length > 0 ? (
-          <div className="ml-[15px] border-l border-border/70 pl-1.5">
+          <div className="ml-[15px] border-l border-foreground/20 pl-1.5">
             {kids.map((k) => renderTree(k, depth + 1))}
           </div>
         ) : null}

@@ -2,7 +2,7 @@
   "sdkMajor": 0,
   "sdkVersion": "0.6.51",
   "artifactFormatVersion": 1,
-  "pluginId": "cloudroom-bb-search-plugin",
+  "pluginId": "buscar-threads",
   "pluginVersion": "0.1.0",
   "builtWith": {
     "bbVersion": "151.0.0",
