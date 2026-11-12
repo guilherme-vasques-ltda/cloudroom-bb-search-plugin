@@ -1,6 +1,56 @@
 // Backend: guarda tags por thread (metadados do plugin em cada thread) e
 // expõe `room-cli tags ...` para agentes e pessoas.
-import type { BbPluginApi } from "@get-bb/plugin-sdk";
+import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
+import { z } from "zod";
+
+const taskSchema = z.object({
+  key: z.string(),
+  title: z.string(),
+  status: z.string(),
+  priority: z.string().nullable(),
+  labels: z.array(z.string()),
+  agentsWorking: z.number(),
+  updatedAt: z.string(),
+});
+export type TaskRow = z.infer<typeof taskSchema>;
+
+const detailSchema = z.object({
+  key: z.string(),
+  title: z.string(),
+  description: z.string(),
+  status: z.string(),
+  priority: z.string().nullable(),
+  subtasks: z.array(z.object({ key: z.string(), title: z.string(), status: z.string() })),
+  comments: z.array(z.object({ body: z.string(), createdAt: z.string() })),
+  threadIds: z.array(z.string()),
+});
+export type TaskDetail = z.infer<typeof detailSchema>;
+
+export const rpcContract = defineRpcContract({
+  task_show: {
+    input: z.object({ key: z.string().regex(/^[A-Za-z0-9-]+$/) }),
+    output: detailSchema,
+  },
+  tasks_list: {
+    input: z.object({ search: z.string().optional(), includeDone: z.boolean().optional() }),
+    output: z.object({ tasks: z.array(taskSchema) }),
+  },
+});
+
+const ROOM_CLI_FALLBACK =
+  "/Applications/Cloudroom.app/Contents/Resources/app.asar.unpacked/node_modules/bb-app/host-daemon/dist/room-cli";
+
+/** O Tasks não publica RPC; lê pelo próprio CLI do Cloudroom. */
+function roomCli(args: string[]): Promise<string> {
+  const bin = existsSync(ROOM_CLI_FALLBACK) ? ROOM_CLI_FALLBACK : "room-cli";
+  return new Promise((resolve, reject) =>
+    execFile(bin, args, { maxBuffer: 32 * 1024 * 1024, timeout: 30_000 }, (err, stdout, stderr) =>
+      err ? reject(new Error(stderr.trim() || err.message)) : resolve(stdout),
+    ),
+  );
+}
 
 export const TAGS_CHANGED = "tags-changed";
 const MAX_TAG = 40;
@@ -40,6 +90,48 @@ Use --json para saída de máquina.`;
 
 export default function plugin(bb: BbPluginApi) {
   const threads = bb.sdk.threads;
+
+  bb.rpc.register(rpcContract, {
+    async task_show({ key }) {
+      const d = JSON.parse(await roomCli(["tasks", "show", key, "--json"])) as Record<string, any>;
+      const t = d.task ?? {};
+      return {
+        key: String(t.key ?? key),
+        title: String(t.title ?? ""),
+        description: String(t.description ?? ""),
+        status: String(t.status ?? ""),
+        priority: t.priority ?? null,
+        subtasks: (d.subtasks ?? []).map((x: any) => ({ key: String(x.key), title: String(x.title ?? ""), status: String(x.status ?? "") })),
+        comments: (d.comments ?? []).map((c: any) => ({ body: String(c.body ?? c.content ?? ""), createdAt: String(c.createdAt ?? "") })),
+        threadIds: (d.taskThreads ?? []).map((x: any) => String(x.threadId ?? x.id)).filter(Boolean),
+      };
+    },
+    async tasks_list({ search, includeDone }) {
+      const out: TaskRow[] = [];
+      let cursor: string | null = null;
+      for (let page = 0; page < 10; page++) {
+        const args = ["tasks", "list", "--json", "--limit", "500", "--sort", "priority"];
+        if (search) args.push("--search", search);
+        if (!includeDone) for (const st of ["backlog", "todo", "in_progress", "in_review"]) args.push("--status", st);
+        if (cursor) args.push("--cursor", cursor);
+        const res = JSON.parse(await roomCli(args)) as { tasks: Record<string, unknown>[]; nextCursor: string | null };
+        for (const t of res.tasks) {
+          out.push({
+            key: String(t.key),
+            title: String(t.title ?? ""),
+            status: String(t.status ?? ""),
+            priority: (t.priority as string | null) ?? null,
+            labels: Array.isArray(t.labels) ? (t.labels as string[]) : [],
+            agentsWorking: Number(t.agentsWorking ?? 0),
+            updatedAt: String(t.updatedAt ?? ""),
+          });
+        }
+        cursor = res.nextCursor;
+        if (!cursor) break;
+      }
+      return { tasks: out };
+    },
+  });
 
   const getTags = async (threadId: string) => {
     const res = await threads.experimental_listPluginMetadata({ pluginId: bb.pluginId, threadIds: [threadId] });

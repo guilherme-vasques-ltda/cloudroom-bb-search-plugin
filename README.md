@@ -40,6 +40,12 @@ A Cloudroom plugin that replaces the sidebar thread list with one that has **sea
 ### Right-click on a thread
 Pin/unpin · Move to folder › · New folder with this thread · Remove from folder · Tags… · Rename… · Copy id · Archive/unarchive.
 
+### Tasks tab in the thread side panel
+- In a thread's side panel, **+ → Tasks** opens a list of Cloudroom Tasks (search, status filter, "include done") without leaving the chat.
+- Click a task to see its description, subtasks and latest comments inline.
+- **Link** adds the task key as a tag on the current thread (amber chip in the list).
+- Reads Tasks through `room-cli tasks` (the Tasks plugin exposes no RPC).
+
 ### Archived
 - "Include archived" loads every archived thread into the tree, search and filters.
 

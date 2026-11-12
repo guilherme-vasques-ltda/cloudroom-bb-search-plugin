@@ -9,11 +9,14 @@ import {
   experimental_ProviderIcon as ProviderIcon,
     experimental_useProviders,
   experimental_useSidebarThreads,
+  Markdown,
   ThreadTitle,
   useSidebarThreadRowStatus,
   useRealtime,
+  useRpc,
   useSdk,
 } from "@get-bb/plugin-sdk/app";
+import type { rpcContract, TaskDetail, TaskRow } from "./server";
 import type {
   PluginSidebarThread,
   PluginThreadListProps,
@@ -1102,11 +1105,187 @@ function ThreadSearchList(props: PluginThreadListProps) {
   );
 }
 
+const STATUS_LABEL: Record<string, string> = {
+  backlog: "Backlog",
+  todo: "A fazer",
+  in_progress: "Em andamento",
+  in_review: "Em revisão",
+  done: "Feito",
+  canceled: "Cancelado",
+};
+const STATUS_ORDER = ["in_progress", "in_review", "todo", "backlog", "done", "canceled"];
+
+function TaskDetails({ taskKey }: { taskKey: string }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [d, setD] = useState<TaskDetail | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    rpc.call("task_show", { key: taskKey }).then(setD, (e: unknown) => setErr(e instanceof Error ? e.message : String(e)));
+  }, [rpc, taskKey]);
+  if (err) return <p className="px-3 pb-2 text-xs text-red-400">{err}</p>;
+  if (!d) return <p className="px-3 pb-2 text-xs text-muted-foreground">Carregando…</p>;
+  return (
+    <div className="space-y-2 px-3 pb-3 text-sm">
+      {d.description ? <div className="text-[13px] [&_p]:my-1"><Markdown content={d.description} /></div> : <p className="text-xs text-muted-foreground">Sem descrição.</p>}
+      {d.subtasks.length ? (
+        <div>
+          <p className="text-[11px] font-medium text-muted-foreground">Subtarefas</p>
+          {d.subtasks.map((x) => (
+            <div key={x.key} className="flex items-center gap-2 text-xs">
+              <span className="font-mono text-amber-300">{x.key}</span>
+              <span className="min-w-0 flex-1 truncate">{x.title}</span>
+              <span className="text-muted-foreground">{STATUS_LABEL[x.status] ?? x.status}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {d.comments.length ? (
+        <div>
+          <p className="text-[11px] font-medium text-muted-foreground">Comentários ({d.comments.length})</p>
+          {d.comments.slice(-5).map((c, i) => (
+            <div key={i} className="mt-1 rounded border border-border/60 p-1.5 text-xs [&_p]:my-0.5">
+              <Markdown content={c.body} />
+            </div>
+          ))}
+        </div>
+      ) : null}
+      {d.threadIds.length ? (
+        <p className="text-[11px] text-muted-foreground">{d.threadIds.length} thread(s) ligada(s) no Tasks</p>
+      ) : null}
+      <a href={`/plugins/tasks/tasks/task/${d.key}`} className="text-[11px] text-muted-foreground underline hover:text-foreground">
+        Abrir no Tasks (sai do chat)
+      </a>
+    </div>
+  );
+}
+
+/** Aba "Tasks" no painel da thread: lista as Tasks e liga uma à thread por tag. */
+function TasksPanel({ threadId }: { threadId: string }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const sdk = useSdk();
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("");
+  const [includeDone, setIncludeDone] = useState(false);
+  const [tasks, setTasks] = useState<TaskRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [openKey, setOpenKey] = useState<string | null>(null);
+  const [tags, refreshTags] = useThreadTags(useMemo(() => [threadId], [threadId]));
+  const mine = tags.get(threadId) ?? NO_TAGS;
+
+  useEffect(() => {
+    setTasks(null);
+    rpc.call("tasks_list", { includeDone }).then(
+      (r) => {
+        setTasks(r.tasks);
+        setError(null);
+      },
+      (e: unknown) => setError(e instanceof Error ? e.message : String(e)),
+    );
+  }, [rpc, includeDone]);
+
+  const words = fold(query.trim()).split(/\s+/).filter(Boolean);
+  const list = (tasks ?? [])
+    .filter((t) => !status || t.status === status)
+    .filter((t) => words.every((w) => fold(`${t.key} ${t.title} ${t.labels.join(" ")}`).includes(w)))
+    .sort(
+      (a, b) =>
+        Number(mine.includes(b.key)) - Number(mine.includes(a.key)) ||
+        STATUS_ORDER.indexOf(a.status) - STATUS_ORDER.indexOf(b.status),
+    );
+  const statuses = [...new Set((tasks ?? []).map((t) => t.status))].sort(
+    (a, b) => STATUS_ORDER.indexOf(a) - STATUS_ORDER.indexOf(b),
+  );
+
+  const toggleLink = async (key: string) => {
+    const next = mine.includes(key) ? mine.filter((x) => x !== key) : [...mine, key];
+    try {
+      await sdk.threads.updatePluginMetadata(
+        next.length ? { threadId, set: { tags: next } } : { threadId, remove: ["tags"] },
+      );
+      refreshTags();
+    } catch (e) {
+      toast.error(`Não deu para ligar: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="space-y-1.5 border-b border-border/60 p-2">
+        <div className="relative">
+          <Icon name="Search" className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Buscar Task por chave, título ou etiqueta…"
+            className="h-7 w-full rounded-md border border-border bg-transparent pl-7 pr-2 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          />
+        </div>
+        <div className="flex items-center gap-1">
+          <Select
+            label="Status"
+            value={status}
+            onChange={setStatus}
+            options={statuses.map((s) => ({ value: s, label: STATUS_LABEL[s] ?? s }))}
+          />
+          <label className="flex shrink-0 cursor-pointer items-center gap-1 text-[11px] text-muted-foreground">
+            <input type="checkbox" checked={includeDone} onChange={(e) => setIncludeDone(e.target.checked)} />
+            Incluir feitas
+          </label>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          {tasks ? `${list.length} de ${tasks.length}` : "Carregando…"} · “Ligar” põe a chave como tag desta thread.
+        </p>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-1">
+        {error ? <p className="p-2 text-xs text-red-400">Não deu para ler as Tasks: {error}</p> : null}
+        {list.map((t) => {
+          const linked = mine.includes(t.key);
+          return (
+            <div key={t.key} className={cn("rounded-md", linked && "bg-amber-400/10", openKey === t.key && "bg-accent/40")}>
+            <div className="group flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent/60">
+              <button
+                type="button"
+                onClick={() => setOpenKey((k) => (k === t.key ? null : t.key))}
+                className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                title={`${t.key} — ${t.title}\n${STATUS_LABEL[t.status] ?? t.status}${t.priority ? ` · ${t.priority}` : ""}${t.labels.length ? `\n${t.labels.join(", ")}` : ""}`}
+              >
+                <span className="shrink-0 rounded border border-amber-400/60 bg-amber-400/10 px-1 font-mono text-[10px] text-amber-300">{t.key}</span>
+                <span className="min-w-0 flex-1 truncate">{t.title}</span>
+              </button>
+              {t.agentsWorking > 0 ? <Icon name="Spinner" className="size-3.5 shrink-0 animate-spin text-muted-foreground [animation-duration:2.5s]" /> : null}
+              <span className="shrink-0 text-[10px] text-muted-foreground">{STATUS_LABEL[t.status] ?? t.status}</span>
+              <button
+                type="button"
+                onClick={() => void toggleLink(t.key)}
+                className={cn(
+                  "shrink-0 rounded border px-1.5 text-[10px]",
+                  linked ? "border-amber-400/60 text-amber-300" : "border-border text-muted-foreground opacity-0 group-hover:opacity-100",
+                )}
+              >
+                {linked ? "Ligada ✓" : "Ligar"}
+              </button>
+            </div>
+            {openKey === t.key ? <TaskDetails taskKey={t.key} /> : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default definePluginApp((app) => {
   app.slots.experimental_threadList({
     id: "buscar",
     title: "Lista com busca e filtros",
     description: "Busca por texto e filtros de projeto, agente e máquina.",
     component: ThreadSearchList,
+  });
+  app.slots.threadPanelAction({
+    id: "tasks-panel",
+    title: "Tasks",
+    icon: "ListTodo",
+    layout: "flush",
+    component: ({ threadId }) => <TasksPanel threadId={threadId} />,
   });
 });
