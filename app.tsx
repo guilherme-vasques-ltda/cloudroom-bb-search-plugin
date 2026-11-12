@@ -1,6 +1,6 @@
 // Buscar Threads — substitui a lista de threads da barra lateral por uma
-// lista com busca e filtros (projeto, agente, máquina, arquivadas).
-// Só frontend: lê o estado vivo da barra lateral pelo SDK, sem servidor.
+// lista com busca, filtros, pastas e tags. Tags ficam nos metadados de
+// cada thread; server.ts expõe `room-cli tags` para os agentes.
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type * as React from "react";
 import type { ReactNode } from "react";
@@ -12,6 +12,7 @@ import {
   experimental_useSidebarThreads,
   ThreadTitle,
   useSidebarThreadRowStatus,
+  useRealtime,
   useSdk,
 } from "@get-bb/plugin-sdk/app";
 import type {
@@ -26,7 +27,10 @@ interface Filters {
   projectId: string; // "" = todos
   providerId: string; // "" = todos
   host: string; // "" = todas; "-" = sem máquina
+  tag: string; // "" = todas
+  section: string; // "" = todas; "-" = sem pasta
   archived: boolean;
+  showFilters: boolean;
 }
 
 const EMPTY: Filters = {
@@ -34,7 +38,10 @@ const EMPTY: Filters = {
   projectId: "",
   providerId: "",
   host: "",
+  tag: "",
+  section: "",
   archived: false,
+  showFilters: true,
 };
 
 const STORAGE_KEY = "buscar-threads.filters.v2";
@@ -142,11 +149,81 @@ function StatusMark({ thread, rowStatus }: { thread: PluginSidebarThread; rowSta
   return null;
 }
 
+const TASK_KEY = /^[A-Z][A-Z0-9]*-\d+$/;
+const TAG_COLORS = [
+  "border-sky-400/40 text-sky-300",
+  "border-violet-400/40 text-violet-300",
+  "border-emerald-400/40 text-emerald-300",
+  "border-pink-400/40 text-pink-300",
+  "border-orange-400/40 text-orange-300",
+  "border-teal-400/40 text-teal-300",
+];
+function tagColor(tag: string): string {
+  if (TASK_KEY.test(tag)) return "border-amber-400/60 bg-amber-400/10 font-mono text-amber-300";
+  let h = 0;
+  for (const c of tag.toLowerCase()) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return TAG_COLORS[h % TAG_COLORS.length]!;
+}
+
+function Tags({ tags }: { tags: readonly string[] }) {
+  if (tags.length === 0) return null;
+  const shown = tags.slice(0, 2);
+  return (
+    <span className="flex shrink-0 items-center gap-0.5" title={tags.join(", ")}>
+      {shown.map((t) => (
+        <span key={t} className={cn("max-w-[72px] truncate rounded border px-1 text-[10px] leading-4", tagColor(t))}>
+          {t}
+        </span>
+      ))}
+      {tags.length > shown.length ? (
+        <span className="text-[10px] text-muted-foreground">+{tags.length - shown.length}</span>
+      ) : null}
+    </span>
+  );
+}
+
+/** Tags de cada thread, lidas dos metadados do plugin; recarrega quando o servidor avisa. */
+function useThreadTags(threadIds: readonly string[]): Map<string, string[]> {
+  const sdk = useSdk();
+  const [tags, setTags] = useState<Map<string, string[]>>(new Map());
+  const [version, setVersion] = useState(0);
+  useRealtime("tags-changed", () => setVersion((v) => v + 1));
+  const key = useMemo(() => [...threadIds].sort().join(","), [threadIds]);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    const ids = key ? key.split(",") : [];
+    (async () => {
+      const next = new Map<string, string[]>();
+      for (let i = 0; i < ids.length; i += 100) {
+        const res = await sdk.threads.experimental_listPluginMetadata({
+          threadIds: ids.slice(i, i + 100),
+          signal: ctrl.signal,
+        });
+        for (const r of res.threads) {
+          const raw = (r.metadata as { tags?: unknown } | null)?.tags;
+          if (Array.isArray(raw)) {
+            const list = raw.filter((x): x is string => typeof x === "string" && x.trim() !== "");
+            if (list.length) next.set(r.threadId, list);
+          }
+        }
+      }
+      return next;
+    })()
+      .then(setTags)
+      .catch(() => {});
+    return () => ctrl.abort();
+  }, [sdk, key, version]);
+  return tags;
+}
+
+const NO_TAGS: readonly string[] = [];
+
 const Row = memo(function Row({
   thread,
   active,
   providerLogo,
   childCount,
+  tags,
   open,
   onToggle,
   onNavigate,
@@ -155,6 +232,7 @@ const Row = memo(function Row({
   active: boolean;
   providerLogo: ProviderLogo;
   childCount: number;
+  tags: readonly string[];
   open: boolean;
   onToggle: () => void;
   onNavigate: () => void;
@@ -218,6 +296,7 @@ const Row = memo(function Row({
           {thread.isArchived ? thread.displayTitle : <ThreadTitle threadId={thread.id} />}
         </span>
         <span className="flex-1" />
+        <Tags tags={tags} />
         <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{lastMessageLabel(lastAt)}</span>
         <span className="flex size-4 shrink-0 items-center justify-center">
           <StatusMark thread={thread} rowStatus={rowStatus != null} />
@@ -391,13 +470,21 @@ function ThreadSearchList(props: PluginThreadListProps) {
     [state.threads, archived.rows, f.archived],
   );
 
+  const visibleIds = useMemo(() => visible.map((t) => t.id), [visible]);
+  const visibleById = useMemo(() => new Map(visible.map((t) => [t.id, t])), [visible]);
+  const threadTags = useThreadTags(visibleIds);
+
   // Opções dos filtros saem só do que existe de fato.
   const options = useMemo(() => {
     const prov = new Set<string>();
     const hosts = new Set<string>();
+    const tagSet = new Map<string, string>();
+    const secs = new Set<string>();
     for (const t of visible) {
       prov.add(t.providerId);
       hosts.add(t.host?.name ?? "-");
+      for (const tag of threadTags.get(t.id) ?? []) tagSet.set(tag.toLowerCase(), tag);
+      secs.add(t.sectionId && sectionName.has(t.sectionId) ? t.sectionId : "-");
     }
     return {
       projects: state.projects
@@ -409,8 +496,14 @@ function ThreadSearchList(props: PluginThreadListProps) {
       hosts: [...hosts]
         .map((h) => ({ value: h, label: h === "-" ? "Nuvem" : h }))
         .sort((a, b) => a.label.localeCompare(b.label)),
+      sections: [...secs]
+        .map((id) => ({ value: id, label: id === "-" ? "Sem pasta" : (sectionName.get(id) ?? id) }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+      tags: [...tagSet.values()]
+        .map((t) => ({ value: t.toLowerCase(), label: t }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
     };
-  }, [visible, state.projects, projectName, providerById]);
+  }, [visible, state.projects, projectName, providerById, threadTags, sectionName]);
 
   const filtered = useMemo(() => {
     const words = fold(f.query.trim()).split(/\s+/).filter(Boolean);
@@ -418,6 +511,17 @@ function ThreadSearchList(props: PluginThreadListProps) {
       if (f.projectId && t.projectId !== f.projectId) return false;
       if (f.providerId && t.providerId !== f.providerId) return false;
       if (f.host && (t.host?.name ?? "-") !== f.host) return false;
+      if (f.section) {
+        // a pasta vale para a thread e para as filhas dela
+        let p: PluginSidebarThread | undefined = t;
+        let sec: string | null = null;
+        while (p && !sec) {
+          sec = p.sectionId && sectionName.has(p.sectionId) ? p.sectionId : null;
+          p = p.parentThreadId ? visibleById.get(p.parentThreadId) : undefined;
+        }
+        if ((sec ?? "-") !== f.section) return false;
+      }
+      if (f.tag && !(threadTags.get(t.id) ?? []).some((x) => x.toLowerCase() === f.tag)) return false;
       if (words.length === 0) return true;
       const hay = fold(
         [
@@ -430,6 +534,7 @@ function ThreadSearchList(props: PluginThreadListProps) {
           t.environment?.branchName,
           t.environment?.name,
           t.sectionId ? sectionName.get(t.sectionId) : null,
+          ...(threadTags.get(t.id) ?? []),
         ]
           .filter(Boolean)
           .join(" "),
@@ -444,7 +549,7 @@ function ThreadSearchList(props: PluginThreadListProps) {
         b.updatedAt - a.updatedAt,
     );
     return out;
-  }, [visible, f, projectName, providerById, sectionName]);
+  }, [visible, visibleById, f, projectName, providerById, sectionName, threadTags]);
 
   // Árvore pai → filhas, como a lista nativa. Com filtro, os pais de quem
   // bateu entram junto para não perder o contexto.
@@ -490,7 +595,7 @@ function ThreadSearchList(props: PluginThreadListProps) {
   }, [shown]);
 
   const [openState, setOpenState] = useState<Record<string, boolean>>({});
-  const searching = f.query !== "" || f.providerId !== "" || f.host !== "";
+  const searching = f.query !== "" || f.providerId !== "" || f.host !== "" || f.tag !== "" || f.section !== "";
   const isOpen = (t: PluginSidebarThread, depth: number) =>
     openState[t.id] ?? (searching || depth === 0);
 
@@ -505,6 +610,7 @@ function ThreadSearchList(props: PluginThreadListProps) {
           active={t.id === props.activeThreadId}
           providerLogo={p ?? { id: t.providerId }}
           childCount={kids.length}
+          tags={threadTags.get(t.id) ?? NO_TAGS}
           open={open}
           onToggle={() => setOpenState((s) => ({ ...s, [t.id]: !open }))}
           onNavigate={props.onNavigate}
@@ -523,8 +629,10 @@ function ThreadSearchList(props: PluginThreadListProps) {
   const renderFolders = (projectId: string, threads: PluginSidebarThread[]): ReactNode => {
     const bySection = new Map<string, PluginSidebarThread[]>();
     const loose: PluginSidebarThread[] = [];
+    const pinned: PluginSidebarThread[] = [];
     for (const t of threads) {
-      if (t.sectionId && sectionName.has(t.sectionId)) {
+      if (t.isPinned) pinned.push(t);
+      else if (t.sectionId && sectionName.has(t.sectionId)) {
         const g = bySection.get(t.sectionId);
         if (g) g.push(t);
         else bySection.set(t.sectionId, [t]);
@@ -533,8 +641,17 @@ function ThreadSearchList(props: PluginThreadListProps) {
     const folders = [...bySection.entries()].sort((a, b) =>
       (sectionName.get(a[0]) ?? "").localeCompare(sectionName.get(b[0]) ?? ""),
     );
+    pinned.sort((a, b) => (a.pinSortKey ?? "~").localeCompare(b.pinSortKey ?? "~") || (b.pinnedAt ?? 0) - (a.pinnedAt ?? 0));
     return (
       <>
+        {pinned.length > 0 ? (
+          <div className="mb-1 rounded-md bg-accent/30 pb-0.5">
+            <div className="flex items-center gap-1.5 px-2 pt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              <Icon name="Pin" className="size-3" /> Fixadas
+            </div>
+            {pinned.map((t) => renderTree(t, 0))}
+          </div>
+        ) : null}
         {folders.map(([sectionId, items]) => {
           const key = `${projectId}:${sectionId}`;
           const closed = collapsed[key] && !f.query;
@@ -565,7 +682,7 @@ function ThreadSearchList(props: PluginThreadListProps) {
   };
 
   const filtersOn =
-    f.query !== "" || f.projectId !== "" || f.providerId !== "" || f.host !== "" || f.archived;
+    f.query !== "" || f.projectId !== "" || f.providerId !== "" || f.host !== "" || f.tag !== "" || f.section !== "" || f.archived;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -582,27 +699,44 @@ function ThreadSearchList(props: PluginThreadListProps) {
                 inputRef.current?.blur();
               }
             }}
-            placeholder="Buscar título, pasta, projeto, branch, id…"
+            placeholder="Buscar título, tag, pasta, projeto, id…"
             aria-label="Buscar threads"
             autoComplete="off"
             spellCheck={false}
-            className="h-7 w-full rounded-md border border-border bg-transparent pl-7 pr-7 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="h-7 w-full rounded-md border border-border bg-transparent pl-7 pr-14 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
           {f.query ? (
             <button
               type="button"
               aria-label="Limpar busca"
               onClick={() => set("query", "")}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              className="absolute right-8 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
             >
               <Icon name="X" className="size-3.5" />
             </button>
           ) : null}
+          <button
+            type="button"
+            aria-label={f.showFilters ? "Esconder filtros" : "Mostrar filtros"}
+            aria-expanded={f.showFilters}
+            title={f.showFilters ? "Esconder filtros" : "Mostrar filtros"}
+            onClick={() => set("showFilters", !f.showFilters)}
+            className={cn(
+              "absolute right-1 top-1/2 flex h-5 -translate-y-1/2 items-center gap-0.5 rounded px-1 text-muted-foreground hover:text-foreground",
+              !f.showFilters && [f.projectId, f.providerId, f.host, f.tag, f.section].filter(Boolean).length + (f.archived ? 1 : 0) > 0 && "text-primary",
+            )}
+          >
+            <Icon name="FilterHorizontal" className="size-3.5" />
+            {!f.showFilters && [f.projectId, f.providerId, f.host, f.tag, f.section].filter(Boolean).length + (f.archived ? 1 : 0) > 0 ? <span className="text-[10px]">{[f.projectId, f.providerId, f.host, f.tag, f.section].filter(Boolean).length + (f.archived ? 1 : 0)}</span> : null}
+          </button>
         </div>
-        <div className="flex gap-1">
+        {f.showFilters ? (<>
+        <div className="grid grid-cols-2 gap-1">
           <Select label="Projeto" value={f.projectId} onChange={(v) => set("projectId", v)} options={options.projects} />
           <Select label="Agente" value={f.providerId} onChange={(v) => set("providerId", v)} options={options.providers} />
           <Select label="Máquina" value={f.host} onChange={(v) => set("host", v)} options={options.hosts} />
+          <Select label="Tag" value={f.tag} onChange={(v) => set("tag", v)} options={options.tags} />
+          <Select label="Pasta" value={f.section} onChange={(v) => set("section", v)} options={options.sections} />
         </div>
         <div className="flex items-center justify-between text-[11px] text-muted-foreground">
           <label className="flex cursor-pointer items-center gap-1">
@@ -612,12 +746,13 @@ function ThreadSearchList(props: PluginThreadListProps) {
           <span>
             {filtered.length} de {visible.length}
             {filtersOn ? (
-              <button type="button" className="ml-2 underline hover:text-foreground" onClick={() => setF(EMPTY)}>
+              <button type="button" className="ml-2 underline hover:text-foreground" onClick={() => setF((p) => ({ ...EMPTY, showFilters: p.showFilters }))}>
                 limpar
               </button>
             ) : null}
           </span>
         </div>
+        </>) : null}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-1 py-1">
