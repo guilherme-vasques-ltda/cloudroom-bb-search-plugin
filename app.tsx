@@ -2,6 +2,7 @@
 // lista com busca e filtros (projeto, agente, máquina, arquivadas).
 // Só frontend: lê o estado vivo da barra lateral pelo SDK, sem servidor.
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
   definePluginApp,
   experimental_ProviderIcon as ProviderIcon,
@@ -102,15 +103,28 @@ function Select({
   );
 }
 
+/** Threads de nuvem não têm máquina própria; as locais têm. */
+function isCloud(t: PluginSidebarThread): boolean {
+  return t.host == null;
+}
+
+type ProviderLogo = { id: string; logoUrl?: string | null; icon?: { glyph: string } | null };
+
 const Row = memo(function Row({
   thread,
   active,
   providerLogo,
+  childCount,
+  open,
+  onToggle,
   onNavigate,
 }: {
   thread: PluginSidebarThread;
   active: boolean;
-  providerLogo: { id: string; logoUrl?: string | null; icon?: { glyph: string } | null };
+  providerLogo: ProviderLogo;
+  childCount: number;
+  open: boolean;
+  onToggle: () => void;
   onNavigate: () => void;
 }) {
   const rowStatus = useSidebarThreadRowStatus(thread.id);
@@ -127,38 +141,48 @@ const Row = memo(function Row({
       ? { id: thread.environment.id, path: thread.environment.path }
       : null,
   };
-  const sub = [thread.host?.name, thread.environment?.branchName].filter(Boolean).join(" · ");
+  const where = isCloud(thread) ? "Nuvem" : thread.host?.name;
+  const sub = [where, thread.environment?.branchName, relativeTime(thread.updatedAt)]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <ThreadActionsContextMenu thread={target}>
       <a
         href={thread.href}
         onClick={onNavigate}
-        title={`${thread.displayTitle}${sub ? `\n${sub}` : ""}\n${thread.id}`}
+        title={`${thread.displayTitle}\n${sub}\n${thread.id}`}
         aria-current={active ? "page" : undefined}
         className={cn(
           "group flex items-center gap-2 rounded-md px-2 py-1.5 text-sm",
           active ? "bg-accent text-foreground" : "text-foreground/90 hover:bg-accent/60",
         )}
       >
-        <ProviderIcon
-          providerKind="agent"
-          provider={providerLogo}
-          className="size-4 shrink-0"
-          aria-hidden
+        <Icon
+          name={isCloud(thread) ? "Cloud" : "Laptop"}
+          className={cn("size-4 shrink-0", isCloud(thread) ? "text-lime-400" : "text-muted-foreground")}
         />
-        <span className={cn("min-w-0 flex-1 truncate", thread.isUnread && "font-semibold")}>
+        <ProviderIcon providerKind="agent" provider={providerLogo} className="size-4 shrink-0" aria-hidden />
+        <span className={cn("min-w-0 truncate", thread.isUnread && "font-semibold")}>
           <ThreadTitle threadId={thread.id} />
         </span>
-        <span className="shrink-0 text-[10px] text-muted-foreground group-hover:hidden">
-          {relativeTime(thread.updatedAt)}
-        </span>
+        {childCount > 0 ? (
+          <button
+            type="button"
+            aria-label={open ? "Recolher filhas" : `Mostrar ${childCount} filhas`}
+            aria-expanded={open}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onToggle();
+            }}
+            className="shrink-0 text-muted-foreground hover:text-foreground"
+          >
+            <Icon name={open ? "ChevronDown" : "ChevronRight"} className="size-3.5" />
+          </button>
+        ) : null}
+        <span className="flex-1" />
         <span className="flex size-4 shrink-0 items-center justify-center" aria-label={thread.indicatorLabel ?? undefined}>
-          <ThreadStatusGlyph
-            indicator={thread.indicator}
-            archived={thread.isArchived}
-            rowStatus={rowStatus}
-            size="compact"
-          />
+          <ThreadStatusGlyph indicator={thread.indicator} archived={thread.isArchived} rowStatus={rowStatus} size="compact" />
         </span>
       </a>
     </ThreadActionsContextMenu>
@@ -220,7 +244,7 @@ function ThreadSearchList(props: PluginThreadListProps) {
         .map((id) => ({ value: id, label: providerById.get(id)?.displayName ?? id }))
         .sort((a, b) => a.label.localeCompare(b.label)),
       hosts: [...hosts]
-        .map((h) => ({ value: h, label: h === "-" ? "Sem máquina" : h }))
+        .map((h) => ({ value: h, label: h === "-" ? "Nuvem" : h }))
         .sort((a, b) => a.label.localeCompare(b.label)),
     };
   }, [visible, state.projects, projectName, providerById]);
@@ -258,7 +282,39 @@ function ThreadSearchList(props: PluginThreadListProps) {
     return out;
   }, [visible, f, projectName, providerById]);
 
-  const shown = filtered.slice(0, limit);
+  // Árvore pai → filhas, como a lista nativa. Com filtro, os pais de quem
+  // bateu entram junto para não perder o contexto.
+  const byId = useMemo(() => new Map(visible.map((t) => [t.id, t])), [visible]);
+  const tree = useMemo(() => {
+    const ids = new Set(filtered.map((t) => t.id));
+    const rows = [...filtered];
+    for (const t of filtered) {
+      let p = t.parentThreadId ? byId.get(t.parentThreadId) : undefined;
+      while (p && !ids.has(p.id)) {
+        ids.add(p.id);
+        rows.push(p);
+        p = p.parentThreadId ? byId.get(p.parentThreadId) : undefined;
+      }
+    }
+    const children = new Map<string, PluginSidebarThread[]>();
+    const roots: PluginSidebarThread[] = [];
+    for (const t of rows) {
+      if (t.parentThreadId && ids.has(t.parentThreadId)) {
+        const c = children.get(t.parentThreadId);
+        if (c) c.push(t);
+        else children.set(t.parentThreadId, [t]);
+      } else roots.push(t);
+    }
+    const order = (a: PluginSidebarThread, b: PluginSidebarThread) =>
+      Number(isRunning(b)) - Number(isRunning(a)) ||
+      Number(b.isPinned) - Number(a.isPinned) ||
+      b.updatedAt - a.updatedAt;
+    roots.sort(order);
+    for (const c of children.values()) c.sort(order);
+    return { roots, children };
+  }, [filtered, byId]);
+
+  const shown = tree.roots.slice(0, limit);
   const groups = useMemo(() => {
     const m = new Map<string, PluginSidebarThread[]>();
     for (const t of shown) {
@@ -268,6 +324,35 @@ function ThreadSearchList(props: PluginThreadListProps) {
     }
     return [...m.entries()];
   }, [shown]);
+
+  const [openState, setOpenState] = useState<Record<string, boolean>>({});
+  const searching = f.query !== "" || f.providerId !== "" || f.host !== "";
+  const isOpen = (t: PluginSidebarThread, depth: number) =>
+    openState[t.id] ?? (searching || depth === 0);
+
+  const renderTree = (t: PluginSidebarThread, depth: number): ReactNode => {
+    const kids = tree.children.get(t.id) ?? [];
+    const open = isOpen(t, depth);
+    const p = providerById.get(t.providerId);
+    return (
+      <div key={t.id}>
+        <Row
+          thread={t}
+          active={t.id === props.activeThreadId}
+          providerLogo={p ? { id: p.id, logoUrl: p.logoUrl, icon: p.icon ?? null } : { id: t.providerId }}
+          childCount={kids.length}
+          open={open}
+          onToggle={() => setOpenState((s) => ({ ...s, [t.id]: !open }))}
+          onNavigate={props.onNavigate}
+        />
+        {open && kids.length > 0 ? (
+          <div className="ml-[15px] border-l border-border/70 pl-1.5">
+            {kids.map((k) => renderTree(k, depth + 1))}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   const filtersOn =
     f.query !== "" || f.projectId !== "" || f.providerId !== "" || f.host !== "" || f.archived;
@@ -344,33 +429,19 @@ function ThreadSearchList(props: PluginThreadListProps) {
                 >
                   <Icon name={isCollapsed ? "ChevronRight" : "ChevronDown"} className="size-3" />
                   <span className="truncate">{projectName.get(projectId) ?? projectId}</span>
-                  <span className="ml-auto">{threads.length}</span>
                 </button>
-                {isCollapsed
-                  ? null
-                  : threads.map((t) => {
-                      const p = providerById.get(t.providerId);
-                      return (
-                        <Row
-                          key={t.id}
-                          thread={t}
-                          active={t.id === props.activeThreadId}
-                          providerLogo={p ? { id: p.id, logoUrl: p.logoUrl, icon: p.icon ?? null } : { id: t.providerId }}
-                          onNavigate={props.onNavigate}
-                        />
-                      );
-                    })}
+                {isCollapsed ? null : threads.map((t) => renderTree(t, 0))}
               </section>
             );
           })
         )}
-        {filtered.length > limit ? (
+        {tree.roots.length > limit ? (
           <button
             type="button"
             onClick={() => setLimit((l) => l + PAGE)}
             className="w-full py-2 text-xs text-muted-foreground hover:text-foreground"
           >
-            Mostrar mais ({filtered.length - limit})
+            Mostrar mais ({tree.roots.length - limit})
           </button>
         ) : null}
         {f.archived && state.experimental_archived?.hasNextPage ? (

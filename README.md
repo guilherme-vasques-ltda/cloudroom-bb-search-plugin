@@ -4,7 +4,7 @@ Plugin do Cloudroom que troca a lista de threads da barra lateral por uma lista 
 
 - Busca por título, projeto, agente, máquina, branch ou id (sem diferenciar acento/maiúscula; várias palavras = todas precisam bater).
 - Filtros: Projeto, Agente, Máquina, incluir arquivadas.
-- Agrupado por projeto; threads rodando primeiro, depois fixadas, depois recentes.
+- Agrupado por projeto, com a mesma árvore da lista nativa: ícone de máquina (local/nuvem), threads filhas recuadas sob a mãe e setinha para abrir/fechar. Ao filtrar, a mãe de quem bateu aparece junto.
 - Clique direito abre o menu normal da thread. Filtros ficam salvos.
 
 ## Instalar
