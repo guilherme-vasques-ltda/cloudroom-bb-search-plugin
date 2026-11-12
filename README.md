@@ -13,7 +13,10 @@ Plugin do Cloudroom que troca a lista de threads da barra lateral por uma lista 
 - Filtros retráteis (ícone ao lado da busca): Projeto, Agente, Máquina, Tag, Pasta, incluir arquivadas (busca todas as arquivadas pela API).
 - Agrupado por projeto, com a mesma árvore da lista nativa: ícone de máquina (local/nuvem), threads filhas recuadas sob a mãe e setinha para abrir/fechar. Ao filtrar, a mãe de quem bateu aparece junto.
 - Hora da última mensagem em cada linha (há N d se passou de 24 h).
-- Clique direito abre o menu normal da thread. Filtros ficam salvos.
+- Clique direito na thread: fixar, mover para pasta, nova pasta com a thread, tirar da pasta, tags, renomear, copiar id, arquivar. Na pasta: renomear, nova, apagar. No projeto: nova pasta.
+- Arraste uma thread para uma pasta para mover; solte no nome do projeto para tirar da pasta.
+- Botões na busca: expandir tudo / retrair tudo / filtros. Os filtros de Projeto e Pasta se filtram entre si.
+- Filtros ficam salvos.
 
 ## Instalar
 

@@ -7,7 +7,6 @@ import type { ReactNode } from "react";
 import {
   definePluginApp,
   experimental_ProviderIcon as ProviderIcon,
-  experimental_ThreadActionsContextMenu as ThreadActionsContextMenu,
     experimental_useProviders,
   experimental_useSidebarThreads,
   ThreadTitle,
@@ -21,6 +20,7 @@ import type {
 } from "@get-bb/plugin-sdk/app";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 interface Filters {
   query: string;
@@ -171,19 +171,19 @@ function Tags({ tags }: { tags: readonly string[] }) {
   return (
     <span className="flex shrink-0 items-center gap-0.5" title={tags.join(", ")}>
       {shown.map((t) => (
-        <span key={t} className={cn("max-w-[72px] truncate rounded border px-1 text-[10px] leading-4", tagColor(t))}>
+        <span key={t} className={cn("max-w-[64px] truncate rounded border px-1 text-[9px] leading-[13px]", tagColor(t))}>
           {t}
         </span>
       ))}
       {tags.length > shown.length ? (
-        <span className="text-[10px] text-muted-foreground">+{tags.length - shown.length}</span>
+        <span className="text-[9px] text-muted-foreground">+{tags.length - shown.length}</span>
       ) : null}
     </span>
   );
 }
 
 /** Tags de cada thread, lidas dos metadados do plugin; recarrega quando o servidor avisa. */
-function useThreadTags(threadIds: readonly string[]): Map<string, string[]> {
+function useThreadTags(threadIds: readonly string[]): [Map<string, string[]>, () => void] {
   const sdk = useSdk();
   const [tags, setTags] = useState<Map<string, string[]>>(new Map());
   const [version, setVersion] = useState(0);
@@ -213,7 +213,7 @@ function useThreadTags(threadIds: readonly string[]): Map<string, string[]> {
       .catch(() => {});
     return () => ctrl.abort();
   }, [sdk, key, version]);
-  return tags;
+  return [tags, () => setVersion((v) => v + 1)];
 }
 
 const NO_TAGS: readonly string[] = [];
@@ -227,6 +227,7 @@ const Row = memo(function Row({
   open,
   onToggle,
   onNavigate,
+  onMenu,
 }: {
   thread: PluginSidebarThread;
   active: boolean;
@@ -236,30 +237,26 @@ const Row = memo(function Row({
   open: boolean;
   onToggle: () => void;
   onNavigate: () => void;
+  onMenu: (x: number, y: number) => void;
 }) {
   useMinuteTick();
   const rowStatus = useSidebarThreadRowStatus(thread.id);
-  const target = {
-    id: thread.id,
-    projectId: thread.projectId,
-    parentThreadId: thread.parentThreadId,
-    archivedAt: thread.archivedAt,
-    pinnedAt: thread.pinnedAt,
-    sectionId: thread.sectionId,
-    isUnread: thread.isUnread,
-    status: thread.status,
-    environment: thread.environment?.id
-      ? { id: thread.environment.id, path: thread.environment.path }
-      : null,
-  };
   const where = isCloud(thread) ? "Nuvem" : thread.host?.name;
   const lastAt = thread.latestAttentionAt || thread.updatedAt;
   const sub = [where, thread.environment?.branchName, `última mensagem ${fullDate(lastAt)}`]
     .filter(Boolean)
     .join(" · ");
   return (
-    <ThreadActionsContextMenu thread={target}>
       <a
+        draggable
+        onDragStart={(e) => {
+          e.dataTransfer.setData(DRAG_TYPE, thread.id);
+          e.dataTransfer.effectAllowed = "move";
+        }}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onMenu(e.clientX, e.clientY);
+        }}
         href={thread.href}
         onClick={onNavigate}
         title={`${thread.displayTitle}\n${sub}\n${thread.id}`}
@@ -303,7 +300,6 @@ const Row = memo(function Row({
           <StatusMark thread={thread} rowStatus={rowStatus != null} />
         </span>
       </a>
-    </ThreadActionsContextMenu>
   );
 });
 
@@ -392,6 +388,162 @@ function fromApi(t: ApiThread, hostName: (id: string) => string | undefined): Pl
   } as unknown as PluginSidebarThread;
 }
 
+const DRAG_TYPE = "application/x-bb-thread-id";
+const EMPTY_FOLDERS_KEY = "buscar-threads.empty-folders.v1";
+
+type MenuState =
+  | { kind: "thread"; x: number; y: number; thread: PluginSidebarThread }
+  | { kind: "folder"; x: number; y: number; sectionId: string; projectId: string }
+  | { kind: "project"; x: number; y: number; projectId: string };
+
+function MenuItem({ onClick, children, danger }: { onClick: () => void; children: ReactNode; danger?: boolean }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-accent",
+        danger && "text-red-400",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+function InlineInput({ placeholder, initial, onSubmit }: { placeholder: string; initial?: string; onSubmit: (v: string) => void }) {
+  const [v, setV] = useState(initial ?? "");
+  return (
+    <form
+      className="px-1 py-1"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (v.trim()) onSubmit(v.trim());
+      }}
+    >
+      <input
+        autoFocus
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        placeholder={placeholder}
+        className="h-7 w-full rounded border border-border bg-transparent px-2 text-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+      />
+    </form>
+  );
+}
+
+function ContextMenu(props: {
+  menu: MenuState;
+  sections: [string, string][];
+  onClose: () => void;
+  onPin: (t: PluginSidebarThread) => void;
+  onMove: (t: PluginSidebarThread, sectionId: string | null) => void;
+  onNewFolder: (name: string, projectId: string, threadId?: string) => void;
+  onRename: (t: PluginSidebarThread, title: string) => void;
+  onArchive: (t: PluginSidebarThread) => void;
+  tagsOf: (t: PluginSidebarThread) => readonly string[];
+  onTags: (t: PluginSidebarThread, tags: string[]) => void;
+  onRenameFolder: (id: string, name: string) => void;
+  onDeleteFolder: (id: string) => void;
+}) {
+  const { menu, onClose } = props;
+  const ref = useRef<HTMLDivElement>(null);
+  const [mode, setMode] = useState<"" | "new" | "rename" | "move" | "tags" | "confirm-delete">("");
+  useEffect(() => {
+    const down = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    };
+    const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("mousedown", down);
+    window.addEventListener("keydown", key);
+    return () => {
+      window.removeEventListener("mousedown", down);
+      window.removeEventListener("keydown", key);
+    };
+  }, [onClose]);
+  const top = Math.min(menu.y, window.innerHeight - 320);
+  const left = Math.min(menu.x, window.innerWidth - 240);
+  const box = "fixed z-50 w-56 rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-lg";
+  const sep = <div className="my-1 h-px bg-border" />;
+
+  let body: ReactNode;
+  if (menu.kind === "thread") {
+    const t = menu.thread;
+    if (mode === "new") body = <InlineInput placeholder="Nome da nova pasta" onSubmit={(n) => props.onNewFolder(n, t.projectId, t.id)} />;
+    else if (mode === "tags")
+      body = (
+        <>
+          <InlineInput
+            placeholder="tags separadas por vírgula"
+            initial={props.tagsOf(t).join(", ")}
+            onSubmit={(v) => props.onTags(t, v.split(",").map((x) => x.trim()).filter(Boolean))}
+          />
+          <p className="px-2 pb-1 text-[10px] text-muted-foreground">Enter salva. Apague tudo e use “Limpar tags” para tirar.</p>
+          <MenuItem onClick={() => props.onTags(t, [])}>Limpar tags</MenuItem>
+        </>
+      );
+    else if (mode === "rename") body = <InlineInput placeholder="Novo título" initial={t.displayTitle} onSubmit={(n) => props.onRename(t, n)} />;
+    else if (mode === "move")
+      body = (
+        <div className="max-h-64 overflow-y-auto">
+          {props.sections.map(([id, name]) => (
+            <MenuItem key={id} onClick={() => props.onMove(t, id)}>
+              <Icon name="Folder" className="size-3.5 shrink-0 text-sky-400" />
+              <span className="min-w-0 flex-1 truncate">{name}</span>
+              {t.sectionId === id ? <span className="text-xs">✓</span> : null}
+            </MenuItem>
+          ))}
+          {sep}
+          <MenuItem onClick={() => setMode("new")}>+ Nova pasta…</MenuItem>
+        </div>
+      );
+    else
+      body = (
+        <>
+          <MenuItem onClick={() => props.onPin(t)}>{t.isPinned ? "Desafixar" : "Fixar no topo"}</MenuItem>
+          {sep}
+          <MenuItem onClick={() => setMode("move")}>Mover para pasta ›</MenuItem>
+          <MenuItem onClick={() => setMode("new")}>Nova pasta com esta thread…</MenuItem>
+          {t.sectionId ? <MenuItem onClick={() => props.onMove(t, null)}>Tirar da pasta</MenuItem> : null}
+          {sep}
+          <MenuItem onClick={() => setMode("tags")}>Tags…</MenuItem>
+          <MenuItem onClick={() => setMode("rename")}>Renomear…</MenuItem>
+          <MenuItem onClick={() => void navigator.clipboard?.writeText(t.id).then(onClose, onClose)}>Copiar id</MenuItem>
+          {sep}
+          <MenuItem onClick={() => props.onArchive(t)}>{t.isArchived ? "Desarquivar" : "Arquivar"}</MenuItem>
+        </>
+      );
+  } else if (menu.kind === "folder") {
+    const name = props.sections.find(([id]) => id === menu.sectionId)?.[1] ?? "";
+    if (mode === "rename") body = <InlineInput placeholder="Nome da pasta" initial={name} onSubmit={(n) => props.onRenameFolder(menu.sectionId, n)} />;
+    else if (mode === "new") body = <InlineInput placeholder="Nome da nova pasta" onSubmit={(n) => props.onNewFolder(n, menu.projectId)} />;
+    else
+      body = (
+        <>
+          <MenuItem onClick={() => setMode("rename")}>Renomear pasta…</MenuItem>
+          <MenuItem onClick={() => setMode("new")}>Nova pasta…</MenuItem>
+          {sep}
+          {mode === "confirm-delete" ? (
+            <MenuItem danger onClick={() => props.onDeleteFolder(menu.sectionId)}>
+              Confirmar: apagar (as threads ficam soltas)
+            </MenuItem>
+          ) : (
+            <MenuItem danger onClick={() => setMode("confirm-delete")}>Apagar pasta…</MenuItem>
+          )}
+        </>
+      );
+  } else {
+    body = mode === "new"
+      ? <InlineInput placeholder="Nome da nova pasta" onSubmit={(n) => props.onNewFolder(n, menu.projectId)} />
+      : <MenuItem onClick={() => setMode("new")}>+ Nova pasta…</MenuItem>;
+  }
+  return (
+    <div ref={ref} className={box} style={{ top, left }} onContextMenu={(e) => e.preventDefault()}>
+      {body}
+    </div>
+  );
+}
+
 /**
  * Nomes das pastas (seções). A lista viva chega vazia nesta versão do
  * Cloudroom, então busca pela API: ao abrir, quando aparece uma pasta
@@ -400,7 +552,7 @@ function fromApi(t: ApiThread, hostName: (id: string) => string | undefined): Pl
 function useSectionNames(
   live: readonly { id: string; name: string }[],
   threads: readonly PluginSidebarThread[],
-): Map<string, string> {
+): [Map<string, string>, () => void] {
   const sdk = useSdk();
   const [fetched, setFetched] = useState<{ id: string; name: string }[]>([]);
   const [tick, setTick] = useState(0);
@@ -420,7 +572,8 @@ function useSectionNames(
       .catch(() => {});
     return () => ctrl.abort();
   }, [sdk, unknownKey, tick]);
-  return useMemo(() => new Map([...fetched, ...live].map((x) => [x.id, x.name])), [fetched, live]);
+  const map = useMemo(() => new Map([...fetched, ...live].map((x) => [x.id, x.name])), [fetched, live]);
+  return [map, () => setTick((n) => n + 1)];
 }
 
 function ThreadSearchList(props: PluginThreadListProps) {
@@ -458,7 +611,62 @@ function ThreadSearchList(props: PluginThreadListProps) {
     return m;
   }, [state.projects]);
 
-  const sectionName = useSectionNames(state.sections, state.threads);
+  const [sectionName, refreshSections] = useSectionNames(state.sections, state.threads);
+  const sdk = useSdk();
+  const [menu, setMenu] = useState<MenuState | null>(null);
+  const [dropTarget, setDropTarget] = useState<string | null>(null);
+  // Pastas criadas por aqui num projeto aparecem nele mesmo vazias.
+  const [emptyFolders, setEmptyFolders] = useState<Record<string, string[]>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem(EMPTY_FOLDERS_KEY) ?? "{}");
+    } catch {
+      return {};
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(EMPTY_FOLDERS_KEY, JSON.stringify(emptyFolders));
+    } catch {
+      /* ok */
+    }
+  }, [emptyFolders]);
+
+  const act = async (label: string, fn: () => Promise<unknown>) => {
+    setMenu(null);
+    try {
+      await fn();
+    } catch (error) {
+      toast.error(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+  const moveTo = (threadId: string, sectionId: string | null) =>
+    act("Não deu para mover", () => sdk.threads.update({ threadId, sectionId }));
+  const createFolder = (name: string, projectId: string, threadId?: string) =>
+    act("Não deu para criar a pasta", async () => {
+      const created = await sdk.threadSections.create({ name });
+      const id = (created as { id?: string; section?: { id: string } }).id ?? (created as { section?: { id: string } }).section?.id;
+      if (!id) throw new Error("resposta sem id");
+      if (threadId) await sdk.threads.update({ threadId, sectionId: id });
+      else setEmptyFolders((m) => ({ ...m, [projectId]: [...(m[projectId] ?? []), id] }));
+      refreshSections();
+    });
+  const dropProps = (key: string, sectionId: string | null) => ({
+    onDragOver: (e: React.DragEvent) => {
+      if (!e.dataTransfer.types.includes(DRAG_TYPE)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      setDropTarget(key);
+    },
+    onDragLeave: () => setDropTarget((k) => (k === key ? null : k)),
+    onDrop: (e: React.DragEvent) => {
+      const id = e.dataTransfer.getData(DRAG_TYPE);
+      setDropTarget(null);
+      if (id) {
+        e.preventDefault();
+        void moveTo(id, sectionId);
+      }
+    },
+  });
 
   const providerById = useMemo(() => {
     const m = new Map<string, (typeof providers.providers)[number]>();
@@ -473,7 +681,7 @@ function ThreadSearchList(props: PluginThreadListProps) {
 
   const visibleIds = useMemo(() => visible.map((t) => t.id), [visible]);
   const visibleById = useMemo(() => new Map(visible.map((t) => [t.id, t])), [visible]);
-  const threadTags = useThreadTags(visibleIds);
+  const [threadTags, refreshTags] = useThreadTags(visibleIds);
 
   // Opções dos filtros saem só do que existe de fato.
   const options = useMemo(() => {
@@ -481,14 +689,18 @@ function ThreadSearchList(props: PluginThreadListProps) {
     const hosts = new Set<string>();
     const tagSet = new Map<string, string>();
     const secs = new Set<string>();
+    const projectsWithSection = new Set<string>();
+    const sectionOf = (t: PluginSidebarThread) => (t.sectionId && sectionName.has(t.sectionId) ? t.sectionId : "-");
     for (const t of visible) {
+      if (!f.section || sectionOf(t) === f.section) projectsWithSection.add(t.projectId);
       prov.add(t.providerId);
       hosts.add(t.host?.name ?? "-");
       for (const tag of threadTags.get(t.id) ?? []) tagSet.set(tag.toLowerCase(), tag);
-      secs.add(t.sectionId && sectionName.has(t.sectionId) ? t.sectionId : "-");
+      if (!f.projectId || t.projectId === f.projectId) secs.add(sectionOf(t));
     }
     return {
       projects: state.projects
+        .filter((p) => !f.section || projectsWithSection.has(p.id) || p.id === f.projectId)
         .map((p) => ({ value: p.id, label: projectName.get(p.id) ?? p.name }))
         .sort((a, b) => a.label.localeCompare(b.label)),
       providers: [...prov]
@@ -504,7 +716,7 @@ function ThreadSearchList(props: PluginThreadListProps) {
         .map((t) => ({ value: t.toLowerCase(), label: t }))
         .sort((a, b) => a.label.localeCompare(b.label)),
     };
-  }, [visible, state.projects, projectName, providerById, threadTags, sectionName]);
+  }, [visible, state.projects, projectName, providerById, threadTags, sectionName, f.projectId, f.section]);
 
   const filtered = useMemo(() => {
     const words = fold(f.query.trim()).split(/\s+/).filter(Boolean);
@@ -615,6 +827,7 @@ function ThreadSearchList(props: PluginThreadListProps) {
           open={open}
           onToggle={() => setOpenState((s) => ({ ...s, [t.id]: !open }))}
           onNavigate={props.onNavigate}
+          onMenu={(x, y) => setMenu({ kind: "thread", x, y, thread: t })}
         />
         {open && kids.length > 0 ? (
           <div className="ml-[15px] border-l border-foreground/20 pl-1.5">
@@ -637,6 +850,7 @@ function ThreadSearchList(props: PluginThreadListProps) {
         else bySection.set(t.sectionId, [t]);
       } else loose.push(t);
     }
+    for (const id of emptyFolders[projectId] ?? []) if (sectionName.has(id) && !bySection.has(id) && !f.query) bySection.set(id, []);
     const folders = [...bySection.entries()].sort((a, b) =>
       (sectionName.get(a[0]) ?? "").localeCompare(sectionName.get(b[0]) ?? ""),
     );
@@ -656,7 +870,15 @@ function ThreadSearchList(props: PluginThreadListProps) {
               <button
                 type="button"
                 onClick={() => setCollapsed((c) => ({ ...c, [key]: !c[key] }))}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-foreground/90 hover:bg-accent/60"
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setMenu({ kind: "folder", x: e.clientX, y: e.clientY, sectionId, projectId });
+                }}
+                {...dropProps(key, sectionId)}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-foreground/90 hover:bg-accent/60",
+                  dropTarget === key && "bg-sky-400/20 ring-1 ring-sky-400/60",
+                )}
               >
                 <span className="-ml-1 flex size-4 shrink-0 items-center justify-center rounded border border-foreground/30 text-[11px] font-semibold leading-none text-muted-foreground">
                   {closed ? "+" : "−"}
@@ -699,18 +921,48 @@ function ThreadSearchList(props: PluginThreadListProps) {
             aria-label="Buscar threads"
             autoComplete="off"
             spellCheck={false}
-            className="h-7 w-full rounded-md border border-border bg-transparent pl-7 pr-14 text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            className="h-7 w-full rounded-md border border-border bg-transparent pl-7 pr-[84px] text-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
           {f.query ? (
             <button
               type="button"
               aria-label="Limpar busca"
               onClick={() => set("query", "")}
-              className="absolute right-8 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              className="absolute right-[70px] top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
             >
               <Icon name="X" className="size-3.5" />
             </button>
           ) : null}
+          <button
+            type="button"
+            title="Expandir tudo"
+            aria-label="Expandir tudo"
+            onClick={() => {
+              const all: Record<string, boolean> = {};
+              for (const id of tree.children.keys()) all[id] = true;
+              setOpenState(all);
+              setCollapsed({});
+            }}
+            className="absolute right-[52px] top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          >
+            <Icon name="ChevronsDown" className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            title="Retrair tudo"
+            aria-label="Retrair tudo"
+            onClick={() => {
+              const all: Record<string, boolean> = {};
+              for (const id of tree.children.keys()) all[id] = false;
+              setOpenState(all);
+              const folders: Record<string, boolean> = {};
+              for (const t of visible) if (t.sectionId) folders[`${t.projectId}:${t.sectionId}`] = true;
+              setCollapsed(folders);
+            }}
+            className="absolute right-[34px] top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+          >
+            <Icon name="ChevronsUp" className="size-3.5" />
+          </button>
           <button
             type="button"
             aria-label={f.showFilters ? "Esconder filtros" : "Mostrar filtros"}
@@ -768,7 +1020,16 @@ function ThreadSearchList(props: PluginThreadListProps) {
                 <button
                   type="button"
                   onClick={() => setCollapsed((c) => ({ ...c, [projectId]: !c[projectId] }))}
-                  className="flex w-full items-center gap-1 px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setMenu({ kind: "project", x: e.clientX, y: e.clientY, projectId });
+                  }}
+                  {...dropProps(`p:${projectId}`, null)}
+                  title="Clique direito: nova pasta. Solte uma thread aqui para tirá-la da pasta."
+                  className={cn(
+                    "flex w-full items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground",
+                    dropTarget === `p:${projectId}` && "bg-sky-400/20 ring-1 ring-sky-400/60",
+                  )}
                 >
                   <Icon name={isCollapsed ? "ChevronRight" : "ChevronDown"} className="size-3" />
                   <span className="truncate">{projectName.get(projectId) ?? projectId}</span>
@@ -793,6 +1054,36 @@ function ThreadSearchList(props: PluginThreadListProps) {
           </p>
         ) : null}
       </div>
+      {menu ? (
+        <ContextMenu
+          menu={menu}
+          sections={[...sectionName].sort((a, b) => a[1].localeCompare(b[1]))}
+          onClose={() => setMenu(null)}
+          onPin={(t) => act("Não deu para fixar", () => (t.isPinned ? sdk.threads.unpin({ threadId: t.id }) : sdk.threads.pin({ threadId: t.id })))}
+          onMove={(t, sectionId) => moveTo(t.id, sectionId)}
+          onNewFolder={(name, projectId, threadId) => createFolder(name, projectId, threadId)}
+          onRename={(t, title) => act("Não deu para renomear", () => sdk.threads.update({ threadId: t.id, title }))}
+          onArchive={(t) => act("Não deu para arquivar", () => (t.isArchived ? sdk.threads.unarchive({ threadId: t.id }) : sdk.threads.archive({ threadId: t.id })))}
+          tagsOf={(t) => threadTags.get(t.id) ?? NO_TAGS}
+          onTags={(t, tags) =>
+            act("Não deu para salvar as tags", async () => {
+              const seen = new Set<string>();
+              const clean = tags.map((x) => x.replace(/\s+/g, " ").slice(0, 40)).filter((x) => {
+                const k = x.toLowerCase();
+                if (seen.has(k)) return false;
+                seen.add(k);
+                return true;
+              });
+              await sdk.threads.updatePluginMetadata(
+                clean.length ? { threadId: t.id, set: { tags: clean } } : { threadId: t.id, remove: ["tags"] },
+              );
+              refreshTags();
+            })
+          }
+          onRenameFolder={(id, name) => act("Não deu para renomear a pasta", async () => { await sdk.threadSections.update({ id, name }); refreshSections(); })}
+          onDeleteFolder={(id) => act("Não deu para apagar a pasta", async () => { await sdk.threadSections.delete({ id }); refreshSections(); })}
+        />
+      ) : null}
     </div>
   );
 }
